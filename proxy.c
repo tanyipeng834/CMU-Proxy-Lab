@@ -9,8 +9,32 @@
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
+static sbuf_t sbuf;
+
+
+void * worker_thread(void * vargs){
+    // detcah the current thread
+    int connfd;
+    Pthread_detach(Pthread_self());
+    while(1){
+        // process one of the connect fd
+        // take intot account the static sbuf which can be used by the thread also
+        connfd = sbuf_remove(&sbuf);
+         printf("Thread %lu: START fd=%d\n",
+               (unsigned long)pthread_self(), connfd);
+
+        process_requests(connfd);
+        printf("Thread %lu: DONE fd=%d\n",
+               (unsigned long)pthread_self(), connfd);
+        Close(connfd);
+
+    }
+    return NULL;
+}
+
 int main(int argc , char** argv)
 {
+    pthread_t tid;
     int listenfd, connfd;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
@@ -21,14 +45,23 @@ int main(int argc , char** argv)
     }
     // this is to open a socket, bind to a port and 
     listenfd = Open_listenfd(argv[1]);
+    // intialize of shared buffer of max 16 descriptors
+    sbuf_init(&sbuf,SBUF_SIZE);
+
+    for(int i=0;i<NUM_THREADS;i++){
+        // create up to 8 threads to process forwarding requests
+        Pthread_create(&tid,NULL,worker_thread,NULL);
+
+    }
     
     while(1){
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA*)&clientaddr,&clientlen);
+        // insert connfd into shared buffer
+        sbuf_insert(&sbuf,connfd);
         Getnameinfo((SA*)&clientaddr,clientlen,hostname,MAXLINE,port,MAXLINE,0);
         printf("Accepted connection from (%s,%s)\n",hostname,port);
-        process_requests(connfd);
-        Close(connfd);
+        
 
         }
 
@@ -59,7 +92,7 @@ void read_requesthdrs(rio_t *rp)
     while(strcmp(buf,"\r\n"))
     {
         Rio_readlineb(rp,buf,MAXLINE);
-        printf("%s",buf);
+       
 
     }
     return;
@@ -191,9 +224,51 @@ void read_server_response(int clientfd, int serverfd)
     Rio_readinitb(&rio,serverfd);
     ssize_t n;
     while((n=Rio_readnb(&rio,buf,MAXLINE))>0){
-        printf("%s\n",buf);
+        
         Rio_writen(clientfd,buf,n);
 
     }
+    // after reading the server fd, one should close the connection to server fd
+    Close(serverfd);
+
+}
+
+
+void sbuf_init(sbuf_t *sp, int n){
+    sp -> buf = Calloc(n,sizeof(int));
+    sp->n = n;
+    sp->front = sp->rear =0;
+    Sem_init(&sp->mutex,0,1);
+    // initially shared buffer has n slots
+    Sem_init(&sp->slots,0,n);
+    Sem_init(&sp->items,0,0);
+}
+
+void sbuf_deinit(sbuf_t *sp){
+    Free(sp->buf);
+}
+
+void sbuf_insert(sbuf_t* sp, int item){
+    // wait for free slots to be able to insert for producers
+    P(&sp->slots);
+    // ensure that you are the only one operating on the shared buffer
+    P(&sp->mutex);
+    sp->buf[(++sp->rear)%(sp->n)] = item;
+    V(&sp->mutex);
+    V(&sp->items);
+
+
+
+}
+
+int sbuf_remove(sbuf_t *sp)
+{   // wait for items for consumers
+    int item;
+    P(&sp->items);
+    P(&sp->mutex);
+    item = sp->buf[(++sp->front)%(sp->n)];
+    V(&sp->mutex);
+    V(&sp->slots);
+    return item;
 
 }
