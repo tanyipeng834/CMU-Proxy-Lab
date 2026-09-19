@@ -10,6 +10,7 @@
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 
 static sbuf_t sbuf;
+static cache_t cache;
 
 
 void * worker_thread(void * vargs){
@@ -272,3 +273,108 @@ int sbuf_remove(sbuf_t *sp)
     return item;
 
 }
+
+void cache_init(cache_t* cache)
+{   // null initialize the hashmap with null
+    for (int i=0;i<NBUCKETS;i++){
+        cache->hashmap[i] = NULL;
+    }
+    cache->lru_head.prev = NULL;
+    // connect the dummy head to the dummy tail
+    cache->lru_head.next = &cache->lru_tail;
+
+    cache->lru_tail.prev = &cache->lru_head;
+    cache->lru_tail.next = NULL;
+    cache->size_cache =0;
+
+
+
+}
+void lru_remove(cache_entry_t* node)
+{
+    // with the dummy head and tail, we can then treat all nodes
+    // insertion as the same
+
+    node->prev->next = node->next;
+    node->next->prev = node->prev;
+    node->next = NULL;
+    node->prev = NULL;
+    
+
+}
+
+void lru_insert(cache_t * cache, cache_entry_t* node)
+
+{
+    cache_entry_t dummy_head = cache->lru_head;
+    cache_entry_t* previous_head_node = dummy_head.next;
+    previous_head_node->prev = node;
+    node->next = previous_head_node;
+    // update the cache lru _head
+    cache->lru_head = node;
+
+
+
+
+
+
+}
+
+static unsigned long hash_url(const char *str)
+{
+    unsigned long hash = 5381;
+    int c;
+
+    while ((c = (unsigned char)*str++) != '\0') {
+        hash = ((hash << 5) + hash) + c;
+    }
+
+    return hash % NBUCKETS;
+}
+
+static void hashmap_insert(cache_entry_t * cache_entry, cache_t* cache)
+{
+    unsigned long index =  hash_url(cache_entry->url);
+    // since we null initailize it, it would be null if we 
+    // do no have a previous head
+    cache_entry* prev_head = cache->hashmap[index];
+    cache_entry->hash_next = prev_head;
+    // update the head to point to the current 
+    cache->hashmap[index] = cache_entry;
+
+
+}
+
+static *cache_entry_t hashmap_get(cache_t * cache, const char* url){
+    // get the index into the bucket which we want to iterate on
+    unsigned long index = hash_url(url);
+
+    cache_entry_t * collision_chain_head = cache->hashmap[index];
+    // iterate through the chain
+    while(collision_chain_head!=NULL)
+    {
+        if(strcmp(collision_chain_head->url,url)==0)return collision_chain_head;
+
+
+        collision_chain_head = collision_chain_head->next;
+            
+
+
+    
+
+
+
+
+
+}
+
+// if there is no success strcmp, return collision_chain_head which would be NULL
+return collision_chain_head;
+
+
+}
+
+
+
+
+
